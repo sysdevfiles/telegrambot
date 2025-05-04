@@ -5,15 +5,16 @@ import shutil
 from dotenv import load_dotenv
 import subprocess
 import logging
+from typing import List, Dict, Any, Tuple, Optional # Mejorar type hinting
 
 CONFIG_FILE = '/etc/zivpn/config.json'
 TRACKING_FILE = '/etc/zivpn/manager_tracking.json'
-BOT_MANAGERS_FILE = '/etc/zivpn/bot_managers.json' # Nuevo archivo de gestores
+BOT_MANAGERS_FILE = '/etc/zivpn/bot_managers.json'
 BACKUP_DIR = 'backups'
 
 logger_usermanager = logging.getLogger(__name__)
 
-# --- Default Structure ---
+# --- Default Structures ---
 DEFAULT_CONFIG = {
   "listen": ":5667",
    "cert": "/etc/zivpn/zivpn.crt",
@@ -24,10 +25,10 @@ DEFAULT_CONFIG = {
     "config": ["root","neri","tomas","yasser","daniel","antonio","mono","doncarlos"]
   }
 }
-DEFAULT_TRACKING = [] # El archivo de tracking es una lista
-DEFAULT_BOT_MANAGERS = [] # Lista de IDs autorizados
+DEFAULT_TRACKING = [] # Lista de dicts: {"username": str, "creator_id": int, "creation_date": str, "expiration_date": str}
+DEFAULT_BOT_MANAGERS = []
 
-# --- Funciones de bajo nivel para leer/escribir JSON ---
+# --- Funciones de bajo nivel ---
 
 def _load_data() -> dict:
     """Carga la estructura completa desde config.json."""
@@ -58,9 +59,7 @@ def _save_data(data: dict) -> bool:
         logger_usermanager.error(f"Error guardando {CONFIG_FILE}: {e}")
         return False
 
-# --- Funciones para Tracking File ---
-
-def _load_tracking_data() -> list:
+def _load_tracking_data() -> List[Dict[str, Any]]:
     """Carga la lista de tracking desde manager_tracking.json."""
     if not os.path.exists(TRACKING_FILE):
         logger_usermanager.warning(f"El archivo de tracking {TRACKING_FILE} no existe. Se creará vacío.")
@@ -75,13 +74,17 @@ def _load_tracking_data() -> list:
             if not isinstance(data, list):
                 logger_usermanager.error(f"El contenido de {TRACKING_FILE} no es una lista. Se usará lista vacía.")
                 return DEFAULT_TRACKING.copy()
-            # Validar entradas (opcional pero recomendado)
+            # Validar entradas con nueva estructura
             valid_data = []
             for entry in data:
-                if isinstance(entry, dict) and "username" in entry and "creator_id" in entry:
+                if (isinstance(entry, dict) and
+                    "username" in entry and
+                    "creator_id" in entry and
+                    "creation_date" in entry and    # Nueva validación
+                    "expiration_date" in entry):   # Nueva validación
                     valid_data.append(entry)
                 else:
-                    logger_usermanager.warning(f"Entrada inválida encontrada en {TRACKING_FILE}: {entry}")
+                    logger_usermanager.warning(f"Entrada inválida o incompleta encontrada en {TRACKING_FILE}: {entry}")
             return valid_data
     except json.JSONDecodeError:
         logger_usermanager.error(f"No se pudo decodificar JSON en {TRACKING_FILE}. Se usará lista vacía.")
@@ -102,8 +105,6 @@ def _save_tracking_data(data: list) -> bool:
     except TypeError as e:
         logger_usermanager.error(f"Error: Los datos de tracking no son serializables a JSON: {e}")
         return False
-
-# --- Funciones para Bot Managers File ---
 
 def _load_bot_managers() -> list[int]:
     """Carga la lista de IDs de gestores autorizados."""
@@ -175,47 +176,52 @@ def init_storage():
             logger_usermanager.error(f"Error al crear el directorio de backups {BACKUP_DIR}: {e}")
 
 
-def add_user(username: str, creator_id: int) -> tuple[bool, str]:
-    """Agrega un username a config.json y registra al creador en manager_tracking.json."""
-    if not username:
-        return False, "El nombre de usuario no puede estar vacío."
+def add_user(username: str, creator_id: int) -> Tuple[bool, str]:
+    """Agrega username a config.json y registra creador y fechas en manager_tracking.json."""
+    if not username: return False, "El nombre de usuario no puede estar vacío."
 
     main_data = _load_data()
     tracking_data = _load_tracking_data()
     config_list = main_data.get("auth", {}).get("config", [])
 
-    # Verificar si ya existe en config.json
-    if username in config_list:
-        return False, f"El usuario '{username}' ya existe en la configuración principal."
-
-    # Verificar si ya existe en tracking (redundante si no está en config, pero seguro)
+    if username in config_list: return False, f"El usuario '{username}' ya existe en la configuración principal."
     if any(entry.get("username") == username for entry in tracking_data):
          logger_usermanager.warning(f"Inconsistencia: Usuario '{username}' encontrado en tracking pero no en config. Se procederá a añadirlo a config.")
-         # No retornamos error aquí, simplemente lo añadiremos a config.json
+
+    # Calcular fechas
+    now = datetime.datetime.now()
+    creation_date_str = now.strftime("%Y-%m-%d %H:%M:%S")
+    expiration_date = now + datetime.timedelta(days=30)
+    expiration_date_str = expiration_date.strftime("%Y-%m-%d %H:%M:%S")
 
     # Añadir a config.json
     config_list.append(username)
     main_data["auth"]["config"] = config_list
 
-    # Añadir a tracking.json (o actualizar si hubo inconsistencia)
+    # Añadir/Actualizar tracking.json
     existing_track_entry = next((entry for entry in tracking_data if entry.get("username") == username), None)
     if existing_track_entry:
-        existing_track_entry["creator_id"] = creator_id # Actualizar creador si ya existía en tracking
+        existing_track_entry["creator_id"] = creator_id
+        existing_track_entry["creation_date"] = creation_date_str # Actualizar fechas si había inconsistencia
+        existing_track_entry["expiration_date"] = expiration_date_str
     else:
-        tracking_data.append({"username": username, "creator_id": creator_id})
+        tracking_data.append({
+            "username": username,
+            "creator_id": creator_id,
+            "creation_date": creation_date_str,
+            "expiration_date": expiration_date_str
+        })
 
     # Guardar ambos archivos
     if _save_data(main_data) and _save_tracking_data(tracking_data):
-        logger_usermanager.info(f"Usuario '{username}' agregado por {creator_id}. Intentando reiniciar zivpn.service...")
-        if not _restart_zivpn_service():
-             logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de agregar a '{username}'.")
-        return True, f"Usuario '{username}' agregado exitosamente."
+        logger_usermanager.info(f"Usuario '{username}' agregado por {creator_id} hasta {expiration_date_str}. Reiniciando zivpn...")
+        if not _restart_zivpn_service(): logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de agregar a '{username}'.")
+        return True, f"Usuario '{username}' agregado exitosamente. Válido hasta {expiration_date.strftime('%Y-%m-%d')}."
     else:
-        # Intentar revertir si es posible (complejo, por ahora solo loguear)
-        logger_usermanager.error(f"Error al guardar uno o ambos archivos para agregar a '{username}'. Estado puede ser inconsistente.")
+        logger_usermanager.error(f"Error crítico al guardar la configuración para '{username}'.")
         return False, f"Error crítico al guardar la configuración para '{username}'. Revisa los logs."
 
-def delete_user(username: str, admin_id: int) -> tuple[bool, str]:
+def delete_user(username: str, admin_id: int) -> Tuple[bool, str]:
     """Elimina un username de ambos archivos, verificando permisos."""
     if not username:
         return False, "El nombre de usuario no puede estar vacío."
@@ -293,30 +299,142 @@ def delete_user(username: str, admin_id: int) -> tuple[bool, str]:
         logger_usermanager.error(f"Error al guardar uno o ambos archivos para eliminar a '{username}'. Estado puede ser inconsistente.")
         return False, f"Error crítico al guardar la configuración para '{username}'. Revisa los logs."
 
+def renew_user(username: str, admin_id: int) -> Tuple[bool, str]:
+    """Renueva la fecha de expiración de un usuario por 30 días."""
+    if not username: return False, "El nombre de usuario no puede estar vacío."
 
-def get_all_users(admin_id: int) -> list[str]:
-    """Obtiene la lista de usernames creados por admin_id (o todos si es main admin)."""
+    tracking_data = _load_tracking_data()
+
+    # Encontrar entrada en tracking
+    track_entry = None
+    for entry in tracking_data:
+        if entry.get("username") == username:
+            track_entry = entry
+            break
+
+    if not track_entry:
+        return False, f"El usuario '{username}' no se encontró en los registros."
+
+    original_creator_id = track_entry.get("creator_id")
+
+    # Verificar permisos (igual que en delete)
+    load_dotenv()
+    original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
+    try: original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
+    except ValueError: original_admin_id = None
+
+    is_creator = (original_creator_id == admin_id)
+    is_main_admin = (admin_id == original_admin_id)
+
+    if not is_creator and not is_main_admin:
+        return False, f"No tienes permiso para renovar a '{username}' (Creado por: {original_creator_id})."
+
+    # Calcular nueva fecha
+    now = datetime.datetime.now()
+    new_expiration_date = now + datetime.timedelta(days=30)
+    new_expiration_date_str = new_expiration_date.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Actualizar fecha en la entrada
+    track_entry["expiration_date"] = new_expiration_date_str
+    # Opcional: Actualizar también creation_date si se quiere reflejar la renovación como "nueva creación"
+    # track_entry["creation_date"] = now.strftime("%Y-%m-%d %H:%M:%S")
+
+    # Guardar tracking_data
+    if _save_tracking_data(tracking_data):
+        logger_usermanager.info(f"Usuario '{username}' renovado por {admin_id} hasta {new_expiration_date_str}.")
+        # No es estrictamente necesario reiniciar zivpn aquí si el usuario ya estaba en config.json
+        # Pero si queremos asegurar consistencia por si zivpn lee fechas (improbable), lo hacemos.
+        # if not _restart_zivpn_service(): logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de renovar a '{username}'.")
+        return True, f"Usuario '{username}' renovado. Nuevo vencimiento: {new_expiration_date.strftime('%Y-%m-%d')}."
+    else:
+        logger_usermanager.error(f"Error al guardar tracking data al renovar a '{username}'.")
+        return False, f"Error crítico al guardar la renovación para '{username}'. Revisa los logs."
+
+def get_all_users(admin_id: int) -> List[Dict[str, Any]]:
+    """Obtiene detalles (username, creator, expiration) de usuarios creados por admin_id (o todos si es main admin)."""
     tracking_data = _load_tracking_data()
 
     load_dotenv()
     original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
-    try:
-        original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
-    except ValueError:
-        original_admin_id = None
+    try: original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
+    except ValueError: original_admin_id = None
 
     is_main_admin = (admin_id == original_admin_id)
 
     if is_main_admin:
-        # Devolver todos los usernames registrados en el tracking
-        usernames = [entry.get("username") for entry in tracking_data if entry.get("username")]
+        filtered_users = tracking_data # Devuelve la lista completa de dicts
     else:
-        # Devolver solo los usernames creados por este admin_id
-        usernames = [entry.get("username") for entry in tracking_data if entry.get("creator_id") == admin_id and entry.get("username")]
+        filtered_users = [entry for entry in tracking_data if entry.get("creator_id") == admin_id]
 
-    # Opcional: Ordenar alfabéticamente
-    usernames.sort(key=str.lower)
-    return usernames
+    # Opcional: Ordenar por fecha de expiración o nombre
+    try:
+        filtered_users.sort(key=lambda x: x.get("username", "").lower())
+    except Exception as e:
+        logger_usermanager.warning(f"No se pudo ordenar la lista de usuarios: {e}")
+
+    return filtered_users # Devuelve lista de diccionarios
+
+def check_and_expire_users() -> bool:
+    """Verifica usuarios expirados, los elimina de ambos archivos y reinicia zivpn si hubo cambios."""
+    logger_usermanager.info("Iniciando chequeo de usuarios expirados...")
+    tracking_data = _load_tracking_data()
+    main_data = _load_data()
+    config_list = main_data.get("auth", {}).get("config", [])
+    now = datetime.datetime.now()
+    expired_usernames = []
+    users_changed = False
+
+    # Identificar expirados
+    for entry in tracking_data:
+        username = entry.get("username")
+        exp_date_str = entry.get("expiration_date")
+        if not username or not exp_date_str:
+            continue
+        try:
+            exp_date = datetime.datetime.strptime(exp_date_str, "%Y-%m-%d %H:%M:%S")
+            if exp_date < now:
+                # No eliminar 'root' aunque hipotéticamente tuviera fecha
+                if username.lower() != "root":
+                    expired_usernames.append(username)
+        except ValueError:
+            logger_usermanager.warning(f"Formato de fecha inválido para usuario '{username}' en tracking: {exp_date_str}")
+
+    if not expired_usernames:
+        logger_usermanager.info("No se encontraron usuarios expirados.")
+        return False # No hubo cambios
+
+    logger_usermanager.info(f"Usuarios expirados encontrados: {', '.join(expired_usernames)}")
+
+    # Eliminar de tracking_data
+    new_tracking_data = [entry for entry in tracking_data if entry.get("username") not in expired_usernames]
+    if len(new_tracking_data) != len(tracking_data):
+        users_changed = True
+
+    # Eliminar de config_list
+    new_config_list = [user for user in config_list if user not in expired_usernames]
+    if len(new_config_list) != len(config_list):
+        main_data["auth"]["config"] = new_config_list
+        users_changed = True
+
+    # Guardar si hubo cambios
+    if users_changed:
+        logger_usermanager.info("Guardando cambios por expiración...")
+        save_config_ok = _save_data(main_data)
+        save_tracking_ok = _save_tracking_data(new_tracking_data)
+
+        if save_config_ok and save_tracking_ok:
+            logger_usermanager.info("Archivos actualizados. Reiniciando zivpn.service...")
+            if not _restart_zivpn_service():
+                logger_usermanager.error("¡FALLO CRÍTICO! No se pudo reiniciar zivpn.service después de eliminar usuarios expirados.")
+            return True # Hubo cambios y se guardaron (independiente del reinicio)
+        else:
+            logger_usermanager.error("¡FALLO CRÍTICO! Error al guardar uno o ambos archivos después de procesar expiraciones. Estado inconsistente.")
+            # Aquí podríamos intentar revertir, pero es complejo. Loguear es crucial.
+            return False # Indicar que hubo un error al guardar
+    else:
+        # Esto no debería pasar si expired_usernames no estaba vacío, pero por seguridad.
+        logger_usermanager.info("No se realizaron cambios efectivos en los archivos.")
+        return False
 
 # --- Funciones de gestión de acceso al bot ---
 

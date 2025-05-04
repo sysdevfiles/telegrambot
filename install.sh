@@ -69,12 +69,15 @@ echo ">>> Instalando/Actualizando dependencias de Python..." | tee -a "$LOG_FILE
 # Activar venv temporalmente para el comando pip
 source venv/bin/activate
 
+# Asegurarse de que requirements.txt existe y se usa
 if [ -f "requirements.txt" ]; then
     echo "Archivo requirements.txt encontrado. Instalando/Actualizando dependencias desde él..." | tee -a "$LOG_FILE"
     pip install -r requirements.txt >> "$LOG_FILE" 2>&1 || { echo "Error en pip install -r requirements.txt. Ver $LOG_FILE"; exit 1; }
 else
-    echo "Archivo requirements.txt no encontrado. Instalando dependencias conocidas (python-telegram-bot, python-dotenv)..." | tee -a "$LOG_FILE"
-    pip install python-telegram-bot python-dotenv >> "$LOG_FILE" 2>&1 || { echo "Error en pip install directo. Ver $LOG_FILE"; exit 1; }
+    # Fallback por si acaso, aunque deberíamos tener requirements.txt
+    echo "ADVERTENCIA: Archivo requirements.txt no encontrado. Instalando dependencias conocidas..." | tee -a "$LOG_FILE"
+    # Añadir APScheduler aquí también
+    pip install python-telegram-bot python-dotenv APScheduler >> "$LOG_FILE" 2>&1 || { echo "Error en pip install directo. Ver $LOG_FILE"; exit 1; }
 fi
 echo "Dependencias de Python instaladas." | tee -a "$LOG_FILE"
 

@@ -6,6 +6,8 @@ from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandl
 import user_manager
 import datetime
 import logger
+from apscheduler.schedulers.asyncio import AsyncIOScheduler # Importar scheduler
+from apscheduler.triggers.cron import CronTrigger # Importar trigger
 
 # Configuración del logging para la librería de Telegram
 logging.basicConfig(
@@ -48,9 +50,10 @@ async def send_management_help(update: Update, context: ContextTypes.DEFAULT_TYP
     help_text = (
         "🤖 *Menú de Gestión de Usuarios (zivpn)*\n\n"
         "Gestiona los usuarios que *tú* has añadido a `/etc/zivpn/config.json`:\n\n"
-        "➕ `/add <username>` - Añadir usuario a la lista `auth.config`.\n*Ejemplo:* `/add juanperez`\n\n"
+        "➕ `/add <username>` - Añadir usuario (30 días).\n*Ejemplo:* `/add juanperez`\n\n"
         "➖ `/delete <username>` - Eliminar usuario (creado por ti) de `auth.config`.\n*Ejemplo:* `/delete juanperez`\n\n"
-        "📋 `/list` - Listar usuarios creados por ti.\n\n"
+        "🔄 `/renew <username>` - Renovar usuario (creado por ti) por 30 días.\n*Ejemplo:* `/renew juanperez`\n\n" # Añadido
+        "📋 `/list` - Listar usuarios creados por ti (con expiración).\n\n"
         "❓ `/help` - Mostrar este menú.\n\n"
         "*Nota: Necesitas autorización del Admin para usar estos comandos.*"
     )
@@ -60,9 +63,10 @@ async def send_management_help(update: Update, context: ContextTypes.DEFAULT_TYP
         help_text = (
             "👑 *Menú de Administrador Principal*\n\n"
             "**Gestión de Usuarios zivpn:**\n"
-            "➕ `/add <username>` - Añadir usuario a `auth.config`.\n"
+            "➕ `/add <username>` - Añadir usuario (30 días).\n"
             "➖ `/delete <username>` - Eliminar usuario de `auth.config` (cualquiera).\n"
-            "📋 `/list` - Listar *todos* los usuarios registrados.\n\n"
+            "🔄 `/renew <username>` - Renovar usuario (cualquiera) por 30 días.\n" # Añadido
+            "📋 `/list` - Listar *todos* los usuarios registrados (con expiración).\n\n"
             "**Gestión de Acceso al Bot:**\n"
             "✅ `/grant <user_id>` - Autorizar a un usuario a usar este bot.\n*Ejemplo:* `/grant 123456789`\n"
             "❌ `/revoke <user_id>` - Revocar autorización a un usuario.\n*Ejemplo:* `/revoke 123456789`\n\n"
@@ -146,8 +150,33 @@ async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.log_action(admin_id, "delete_username_fail", target_username=username_to_delete, details=message)
         await update.message.reply_text(f"⚠️ {message}")
 
+async def renew_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Renueva la fecha de expiración de un usuario (si tiene permiso)."""
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ No tienes permiso para usar este comando.")
+        return
+
+    admin_id = update.effective_user.id # ID del usuario que ejecuta el comando
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("Uso: /renew <username>")
+        return
+
+    username_to_renew = args[0]
+
+    # Pasar admin_id para verificación de permisos en user_manager
+    success, message = user_manager.renew_user(username=username_to_renew, admin_id=admin_id)
+
+    if success:
+        logger.log_action(admin_id, "renew_username", target_username=username_to_renew, details=message)
+        await update.message.reply_text(f"✅ {message}")
+    else:
+        logger.log_action(admin_id, "renew_username_fail", target_username=username_to_renew, details=message)
+        await update.message.reply_text(f"⚠️ {message}")
+
 async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lista los usernames creados por el usuario (o todos si es admin)."""
+    """Lista los usernames creados por el usuario (o todos si es admin), con fecha de expiración."""
     if not is_authorized(update):
         await update.message.reply_text("⛔ No tienes permiso para usar este comando.")
         return
@@ -290,19 +319,29 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Si no está autorizado, no respondemos nada a comandos desconocidos
 
 async def post_init(application: Application):
-    """Acciones a realizar después de inicializar el bot (ej. definir comandos)."""
-    # Añadir grant y revoke
+    """Acciones a realizar después de inicializar el bot y el scheduler."""
+    # Añadir renew
     await application.bot.set_my_commands([
         BotCommand("start", "▶️ Iniciar el bot"),
         BotCommand("help", "❓ Mostrar menú de ayuda"),
-        BotCommand("add", "➕ Añadir usuario a zivpn"),
+        BotCommand("add", "➕ Añadir usuario a zivpn (30d)"),
         BotCommand("delete", "➖ Eliminar usuario de zivpn"),
+        BotCommand("renew", "🔄 Renovar usuario zivpn (30d)"), # Añadido
         BotCommand("list", "📋 Listar usuarios de zivpn"),
-        BotCommand("grant", "✅ (Admin) Autorizar usuario para el bot"),
-        BotCommand("revoke", "❌ (Admin) Revocar usuario del bot"),
+        BotCommand("grant", "✅ (Admin) Autorizar usuario bot"),
+        BotCommand("revoke", "❌ (Admin) Revocar usuario bot"),
         BotCommand("backup", "💾 (Admin) Crear backup config"),
     ])
     logger_telegram.info("Comandos del bot definidos.")
+
+    # --- Configuración del Scheduler ---
+    scheduler = AsyncIOScheduler(timezone="UTC") # O la timezone relevante
+    # Ejecutar check_and_expire_users todos los días a las 03:00 UTC
+    scheduler.add_job(user_manager.check_and_expire_users, CronTrigger(hour=3, minute=0))
+    scheduler.start()
+    logger_telegram.info("Scheduler iniciado. Chequeo de expiración programado diariamente a las 03:00 UTC.")
+    # Guardar scheduler en context para poder apagarlo limpiamente si fuera necesario
+    application.bot_data['scheduler'] = scheduler
 
 def main():
     """Función principal para iniciar el bot."""
@@ -317,6 +356,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("add", add_user_command))
     application.add_handler(CommandHandler("delete", delete_user_command))
+    application.add_handler(CommandHandler("renew", renew_user_command)) # Añadido
     application.add_handler(CommandHandler("list", list_users_command))
     application.add_handler(CommandHandler("grant", grant_access_command)) # Añadido
     application.add_handler(CommandHandler("revoke", revoke_access_command)) # Añadido
@@ -325,6 +365,12 @@ def main():
 
     logger_telegram.info("Bot listo y escuchando...")
     application.run_polling()
+
+    # Apagar scheduler al detener el bot (si se detiene limpiamente)
+    scheduler = application.bot_data.get('scheduler')
+    if scheduler and scheduler.running:
+        scheduler.shutdown()
+        logger_telegram.info("Scheduler detenido.")
 
 if __name__ == '__main__':
     main()
