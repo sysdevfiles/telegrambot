@@ -86,19 +86,41 @@ echo ">>> Creando/Asegurando directorio de configuración $CONFIG_DIR..." | tee 
 # Removido sudo
 mkdir -p "$CONFIG_DIR"
 
-echo ">>> Creando/Sobrescribiendo archivo de datos $CONFIG_DIR/config.json..." | tee -a "$LOG_FILE"
+echo ">>> Creando/Sobrescribiendo archivo de datos $CONFIG_DIR/config.json con estructura por defecto..." | tee -a "$LOG_FILE"
 # Removido sudo
-sh -c "echo '[]' > ${CONFIG_DIR}/config.json"
-echo "Archivo config.json creado/reiniciado." | tee -a "$LOG_FILE"
+cat << EOF > "${CONFIG_DIR}/config.json"
+{
+  "listen": ":5667",
+   "cert": "/etc/zivpn/zivpn.crt",
+   "key": "/etc/zivpn/zivpn.key",
+   "obfs":"zivpn",
+   "auth": {
+    "mode": "passwords",
+    "config": ["root","neri","tomas","yasser","daniel","antonio","mono","doncarlos"]
+  }
+}
+EOF
+echo "Archivo config.json creado/reiniciado con estructura por defecto." | tee -a "$LOG_FILE"
 
 echo ">>> Creando/Sobrescribiendo archivo de log $CONFIG_DIR/admin_log.json..." | tee -a "$LOG_FILE"
 # Removido sudo
 sh -c "echo '[]' > ${CONFIG_DIR}/admin_log.json"
 echo "Archivo admin_log.json creado/reiniciado." | tee -a "$LOG_FILE"
 
+# --- Añadir creación de archivo de tracking ---
+echo ">>> Creando/Sobrescribiendo archivo de tracking $CONFIG_DIR/manager_tracking.json..." | tee -a "$LOG_FILE"
+# Removido sudo
+sh -c "echo '[]' > ${CONFIG_DIR}/manager_tracking.json"
+echo "Archivo manager_tracking.json creado/reiniciado." | tee -a "$LOG_FILE"
+# --- Fin de añadido ---
+
 echo ">>> Estableciendo permisos para $CONFIG_DIR..." | tee -a "$LOG_FILE"
 # Removido sudo, asegura que el propietario sea root:root
 chown -R "$BOT_USER":"$BOT_GROUP" "$CONFIG_DIR"
+# Asegurar permisos específicos si es necesario (aunque chown -R debería bastar)
+# chmod 600 "${CONFIG_DIR}/config.json" # Ejemplo si se quisiera más restricción
+# chmod 600 "${CONFIG_DIR}/manager_tracking.json"
+# chmod 600 "${CONFIG_DIR}/admin_log.json"
 echo "Propietario de $CONFIG_DIR establecido a $BOT_USER:$BOT_GROUP." | tee -a "$LOG_FILE"
 
 # --- 6. Crear Directorio de Backups Local ---

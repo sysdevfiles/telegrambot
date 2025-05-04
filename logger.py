@@ -5,13 +5,13 @@ import os
 # Apunta al archivo de log administrativo dedicado
 LOG_FILE = '/etc/zivpn/admin_log.json'
 
-def log_action(admin_id: int, action: str, target_user_id: int | None = None, details: str = ""):
+def log_action(admin_id: int, action: str, target_username: str | None = None, details: str = ""):
     """Registra una acción administrativa en el archivo JSON."""
     log_entry = {
         'timestamp': datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         'admin_id': admin_id,
         'action': action,
-        'target_user_id': target_user_id,
+        'target_username': target_username,
         'details': details
     }
 

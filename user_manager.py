@@ -3,290 +3,305 @@ import datetime
 import os
 import shutil
 from dotenv import load_dotenv
-import subprocess # Import subprocess module
-import logging # Use logging for better output control
+import subprocess
+import logging
 
 CONFIG_FILE = '/etc/zivpn/config.json'
-BACKUP_DIR = 'backups' # Directorio local para backups
+TRACKING_FILE = '/etc/zivpn/manager_tracking.json' # Nuevo archivo de tracking
+BACKUP_DIR = 'backups'
 
-# Get a logger instance (optional, but good practice)
 logger_usermanager = logging.getLogger(__name__)
+
+# --- Default Structure ---
+DEFAULT_CONFIG = {
+  "listen": ":5667",
+   "cert": "/etc/zivpn/zivpn.crt",
+   "key": "/etc/zivpn/zivpn.key",
+   "obfs":"zivpn",
+   "auth": {
+    "mode": "passwords",
+    "config": ["root","neri","tomas","yasser","daniel","antonio","mono","doncarlos"]
+  }
+}
+DEFAULT_TRACKING = [] # El archivo de tracking es una lista
 
 # --- Funciones de bajo nivel para leer/escribir JSON ---
 
-def _load_data() -> list:
-    """Carga los datos desde el archivo JSON. Devuelve una lista vacía en caso de error."""
+def _load_data() -> dict:
+    """Carga la estructura completa desde config.json."""
     if not os.path.exists(CONFIG_FILE):
-        print(f"Advertencia: El archivo de configuración {CONFIG_FILE} no existe. Se creará uno vacío.")
-        _save_data([]) # Intenta crear el archivo
-        return []
+        logger_usermanager.warning(f"El archivo de configuración {CONFIG_FILE} no existe. Se creará con valores por defecto.")
+        _save_data(DEFAULT_CONFIG)
+        return DEFAULT_CONFIG.copy()
     if os.path.getsize(CONFIG_FILE) == 0:
-         print(f"Advertencia: El archivo de configuración {CONFIG_FILE} está vacío. Se tratará como lista vacía.")
-         return []
+         logger_usermanager.warning(f"El archivo de configuración {CONFIG_FILE} está vacío. Se usará la estructura por defecto.")
+         return DEFAULT_CONFIG.copy()
     try:
-        with open(CONFIG_FILE, 'r') as f:
+        with open(CONFIG_FILE, 'r') as f: data = json.load(f)
+        if not isinstance(data, dict) or "auth" not in data or "config" not in data["auth"] or not isinstance(data["auth"]["config"], list):
+             logger_usermanager.error(f"Estructura inválida en {CONFIG_FILE}. Usando defecto.")
+             return DEFAULT_CONFIG.copy()
+        return data
+    except Exception as e:
+        logger_usermanager.error(f"Error cargando {CONFIG_FILE}: {e}. Usando defecto.")
+        return DEFAULT_CONFIG.copy()
+
+
+def _save_data(data: dict) -> bool:
+    """Guarda la estructura completa en config.json."""
+    try:
+        with open(CONFIG_FILE, 'w') as f: json.dump(data, f, indent=2)
+        return True
+    except Exception as e:
+        logger_usermanager.error(f"Error guardando {CONFIG_FILE}: {e}")
+        return False
+
+# --- Funciones para Tracking File ---
+
+def _load_tracking_data() -> list:
+    """Carga la lista de tracking desde manager_tracking.json."""
+    if not os.path.exists(TRACKING_FILE):
+        logger_usermanager.warning(f"El archivo de tracking {TRACKING_FILE} no existe. Se creará vacío.")
+        _save_tracking_data(DEFAULT_TRACKING)
+        return DEFAULT_TRACKING.copy()
+    if os.path.getsize(TRACKING_FILE) == 0:
+         logger_usermanager.warning(f"El archivo de tracking {TRACKING_FILE} está vacío.")
+         return DEFAULT_TRACKING.copy()
+    try:
+        with open(TRACKING_FILE, 'r') as f:
             data = json.load(f)
             if not isinstance(data, list):
-                print(f"Error: El contenido de {CONFIG_FILE} no es una lista JSON. Se devolverá una lista vacía.")
-                return []
-            return data
+                logger_usermanager.error(f"El contenido de {TRACKING_FILE} no es una lista. Se usará lista vacía.")
+                return DEFAULT_TRACKING.copy()
+            # Validar entradas (opcional pero recomendado)
+            valid_data = []
+            for entry in data:
+                if isinstance(entry, dict) and "username" in entry and "creator_id" in entry:
+                    valid_data.append(entry)
+                else:
+                    logger_usermanager.warning(f"Entrada inválida encontrada en {TRACKING_FILE}: {entry}")
+            return valid_data
     except json.JSONDecodeError:
-        print(f"Error: No se pudo decodificar el JSON en {CONFIG_FILE}. ¿Está corrupto?")
-        return [] # Devuelve lista vacía para evitar fallos mayores
+        logger_usermanager.error(f"No se pudo decodificar JSON en {TRACKING_FILE}. Se usará lista vacía.")
+        return DEFAULT_TRACKING.copy()
     except IOError as e:
-        print(f"Error de E/S al leer {CONFIG_FILE}: {e}")
-        return [] # Devuelve lista vacía
+        logger_usermanager.error(f"Error de E/S al leer {TRACKING_FILE}: {e}. Se usará lista vacía.")
+        return DEFAULT_TRACKING.copy()
 
-def _save_data(data: list):
-    """Guarda los datos en el archivo JSON."""
+def _save_tracking_data(data: list) -> bool:
+    """Guarda la lista de tracking en manager_tracking.json."""
     try:
-        with open(CONFIG_FILE, 'w') as f:
+        with open(TRACKING_FILE, 'w') as f:
             json.dump(data, f, indent=4)
         return True
     except IOError as e:
-        print(f"Error de E/S al escribir en {CONFIG_FILE}: {e}")
-        print("Verifica los permisos de escritura.")
+        logger_usermanager.error(f"Error de E/S al escribir en {TRACKING_FILE}: {e}")
         return False
     except TypeError as e:
-        print(f"Error: Los datos a guardar no son serializables a JSON: {e}")
+        logger_usermanager.error(f"Error: Los datos de tracking no son serializables a JSON: {e}")
         return False
 
-# --- Funciones de gestión de usuarios ---
+# --- Funciones de gestión ---
 
 def _restart_zivpn_service():
     """Intenta reiniciar el servicio zivpn.service."""
     command = ["systemctl", "restart", "zivpn.service"]
     try:
-        # Execute the command
         result = subprocess.run(command, check=True, capture_output=True, text=True)
         logger_usermanager.info(f"Comando '{' '.join(command)}' ejecutado exitosamente.")
-        # Optional: Log stdout/stderr if needed
-        # logger_usermanager.debug(f"stdout: {result.stdout}")
-        # logger_usermanager.debug(f"stderr: {result.stderr}")
         return True
-    except FileNotFoundError:
-        logger_usermanager.error(f"Error: El comando 'systemctl' no se encontró. ¿Está systemd instalado y en el PATH?")
-        return False
-    except subprocess.CalledProcessError as e:
-        logger_usermanager.error(f"Error al ejecutar '{' '.join(command)}'. Código de retorno: {e.returncode}")
-        logger_usermanager.error(f"stderr: {e.stderr}")
-        return False
     except Exception as e:
-        logger_usermanager.error(f"Error inesperado al ejecutar '{' '.join(command)}': {e}")
+        logger_usermanager.error(f"Error reiniciando zivpn.service: {e}")
         return False
 
+
 def init_storage():
-    """Inicializa el archivo de configuración si no existe y el directorio de backups."""
-    # Asegurar que el archivo JSON existe (lo hace _load_data si no existe)
-    _load_data()
-    # Crear directorio de backups si no existe
+    """Inicializa ambos archivos de configuración si no existen."""
+    _load_data() # Asegura config.json
+    _load_tracking_data() # Asegura manager_tracking.json
     if not os.path.exists(BACKUP_DIR):
         try:
             os.makedirs(BACKUP_DIR)
-            print(f"Directorio de backups creado en: {BACKUP_DIR}")
+            logger_usermanager.info(f"Directorio de backups creado en: {BACKUP_DIR}")
         except OSError as e:
-            print(f"Error al crear el directorio de backups {BACKUP_DIR}: {e}")
+            logger_usermanager.error(f"Error al crear el directorio de backups {BACKUP_DIR}: {e}")
 
-# Modificado para aceptar y guardar creator_id
-def add_user(telegram_id: int, creator_id: int) -> bool:
-    """Agrega un nuevo usuario o lo reactiva si ya existe, asociándolo a un creador."""
-    users = _load_data()
-    now = datetime.datetime.now()
-    creation_date = now.strftime("%Y-%m-%d %H:%M:%S")
-    expiration_date = (now + datetime.timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-    action_performed = "agregado" # Default action text
 
-    user_found = False
-    for user in users:
-        if user.get('telegram_id') == telegram_id:
-            # Reactivar: Actualiza fechas y también el creador (opcional, podría mantenerse el original)
-            user['creation_date'] = creation_date
-            user['expiration_date'] = expiration_date
-            user['creator_id'] = creator_id # Actualiza el creador en reactivación
-            user_found = True
-            action_performed = "reactivado" # Update action text
-            logger_usermanager.info(f"Usuario {telegram_id} {action_performed} por {creator_id}.")
-            break
+def add_user(username: str, creator_id: int) -> tuple[bool, str]:
+    """Agrega un username a config.json y registra al creador en manager_tracking.json."""
+    if not username:
+        return False, "El nombre de usuario no puede estar vacío."
 
-    if not user_found:
-        users.append({
-            'telegram_id': telegram_id,
-            'creation_date': creation_date,
-            'expiration_date': expiration_date,
-            'creator_id': creator_id # Añade el creador
-        })
-        logger_usermanager.info(f"Usuario {telegram_id} {action_performed} por {creator_id}.")
+    main_data = _load_data()
+    tracking_data = _load_tracking_data()
+    config_list = main_data.get("auth", {}).get("config", [])
 
-    if _save_data(users):
-        logger_usermanager.info(f"Datos guardados. Intentando reiniciar zivpn.service tras {action_performed} de usuario {telegram_id}...")
+    # Verificar si ya existe en config.json
+    if username in config_list:
+        return False, f"El usuario '{username}' ya existe en la configuración principal."
+
+    # Verificar si ya existe en tracking (redundante si no está en config, pero seguro)
+    if any(entry.get("username") == username for entry in tracking_data):
+         logger_usermanager.warning(f"Inconsistencia: Usuario '{username}' encontrado en tracking pero no en config. Se procederá a añadirlo a config.")
+         # No retornamos error aquí, simplemente lo añadiremos a config.json
+
+    # Añadir a config.json
+    config_list.append(username)
+    main_data["auth"]["config"] = config_list
+
+    # Añadir a tracking.json (o actualizar si hubo inconsistencia)
+    existing_track_entry = next((entry for entry in tracking_data if entry.get("username") == username), None)
+    if existing_track_entry:
+        existing_track_entry["creator_id"] = creator_id # Actualizar creador si ya existía en tracking
+    else:
+        tracking_data.append({"username": username, "creator_id": creator_id})
+
+    # Guardar ambos archivos
+    if _save_data(main_data) and _save_tracking_data(tracking_data):
+        logger_usermanager.info(f"Usuario '{username}' agregado por {creator_id}. Intentando reiniciar zivpn.service...")
         if not _restart_zivpn_service():
-             # Log or handle the error if the restart fails, but don't necessarily fail the add_user operation
-             logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de {action_performed} de usuario {telegram_id}.")
-        return True # Return True because user data was saved
+             logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de agregar a '{username}'.")
+        return True, f"Usuario '{username}' agregado exitosamente."
     else:
-        return False # Return False if saving data failed
+        # Intentar revertir si es posible (complejo, por ahora solo loguear)
+        logger_usermanager.error(f"Error al guardar uno o ambos archivos para agregar a '{username}'. Estado puede ser inconsistente.")
+        return False, f"Error crítico al guardar la configuración para '{username}'. Revisa los logs."
 
-# Modificado para verificar creator_id
-def delete_user(telegram_id: int, admin_id: int) -> tuple[bool, str]:
-    """Elimina un usuario si el admin_id coincide con el creator_id."""
-    users = _load_data()
-    initial_length = len(users)
-    user_to_delete = None
-    user_index = -1
+def delete_user(username: str, admin_id: int) -> tuple[bool, str]:
+    """Elimina un username de ambos archivos, verificando permisos."""
+    if not username:
+        return False, "El nombre de usuario no puede estar vacío."
+    if username.lower() == "root":
+         return False, "No se permite eliminar al usuario 'root'."
 
-    for i, user in enumerate(users):
-        if user.get('telegram_id') == telegram_id:
-            user_to_delete = user
-            user_index = i
-            break
+    main_data = _load_data()
+    tracking_data = _load_tracking_data()
+    config_list = main_data.get("auth", {}).get("config", [])
 
-    if user_to_delete is None:
-        return False, "Usuario no encontrado."
-
-    if user_to_delete.get('creator_id') != admin_id:
-        # Comprobar si el que intenta borrar es el ADMIN_TELEGRAM_ID original (override)
-        # Cargar ADMIN_TELEGRAM_ID de .env para la comparación
-        load_dotenv() # Asegurarse de que las variables de entorno estén cargadas
-        original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
-        original_admin_id = None
-        if original_admin_id_str:
-            try:
-                original_admin_id = int(original_admin_id_str)
-            except ValueError:
-                pass # Ignorar si no es un entero válido
-
-        if admin_id != original_admin_id: # Solo permitir override al admin original
-             print(f"Intento de eliminación fallido: Usuario {admin_id} no creó al usuario {telegram_id} (creado por {user_to_delete.get('creator_id')}).")
-             return False, "No tienes permiso para eliminar este usuario (no lo creaste)."
-        else:
-             print(f"INFO: Admin original {admin_id} eliminando usuario {telegram_id} creado por {user_to_delete.get('creator_id')}.")
-
-
-    # Eliminar el usuario de la lista
-    del users[user_index]
-
-    if _save_data(users):
-        return True, "Usuario eliminado exitosamente."
-    else:
-        return False, "Error al guardar los cambios tras eliminar el usuario."
-
-# Modificado para verificar creator_id
-def renew_user(telegram_id: int, admin_id: int) -> tuple[bool, str]:
-    """Extiende el acceso de un usuario por 30 días si admin_id coincide con creator_id."""
-    users = _load_data()
-    user_found = False
+    # Encontrar entrada en tracking
+    track_entry_index = -1
     original_creator_id = None
-    now = datetime.datetime.now()
-    new_expiration_date = (now + datetime.timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
-
-    user_index = -1
-    for i, user in enumerate(users):
-        if user.get('telegram_id') == telegram_id:
-            user_index = i
-            original_creator_id = user.get('creator_id')
+    for i, entry in enumerate(tracking_data):
+        if entry.get("username") == username:
+            track_entry_index = i
+            original_creator_id = entry.get("creator_id")
             break
 
-    if user_index == -1:
-        return False, "Usuario no encontrado."
+    if track_entry_index == -1:
+        # Si no está en tracking, pero sí en config (inconsistencia), permitir borrar solo al admin
+        if username in config_list:
+             load_dotenv()
+             original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
+             try:
+                 original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
+             except ValueError:
+                 original_admin_id = None
 
-    # Verificar permiso
-    if original_creator_id != admin_id:
-        # Comprobar si el que intenta renovar es el ADMIN_TELEGRAM_ID original (override)
-        load_dotenv()
-        original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
-        original_admin_id = None
-        if original_admin_id_str:
-            try:
-                original_admin_id = int(original_admin_id_str)
-            except ValueError:
-                pass
-
-        if admin_id != original_admin_id: # Solo permitir override al admin original
-            print(f"Intento de renovación fallido: Usuario {admin_id} no creó al usuario {telegram_id} (creado por {original_creator_id}).")
-            return False, "No tienes permiso para renovar este usuario (no lo creaste)."
+             if admin_id == original_admin_id:
+                 logger_usermanager.warning(f"Usuario '{username}' encontrado en config pero no en tracking. Admin {admin_id} procederá a eliminarlo de config.")
+                 config_list.remove(username)
+                 main_data["auth"]["config"] = config_list
+                 if _save_data(main_data):
+                     if not _restart_zivpn_service(): logger_usermanager.warning(f"No se pudo reiniciar zivpn.service tras eliminar inconsistencia '{username}'.")
+                     return True, f"Usuario '{username}' (inconsistente) eliminado de config.json por Admin."
+                 else:
+                     return False, f"Error al guardar config.json tras intentar eliminar inconsistencia '{username}'."
+             else:
+                 return False, f"Usuario '{username}' no encontrado en los registros de gestión. Contacta al Admin."
         else:
-            print(f"INFO: Admin original {admin_id} renovando usuario {telegram_id} creado por {original_creator_id}.")
+            return False, f"El usuario '{username}' no se encontró."
 
 
-    # Realizar la renovación
-    users[user_index]['expiration_date'] = new_expiration_date
-    # Opcional: Actualizar creation_date o incluso creator_id si la política lo requiere
-    # users[user_index]['creator_id'] = admin_id # Si la renovación transfiere propiedad
-    user_found = True
-
-
-    if user_found:
-        if _save_data(users):
-            logger_usermanager.info(f"Datos guardados. Intentando reiniciar zivpn.service tras renovación de usuario {telegram_id}...")
-            if not _restart_zivpn_service():
-                logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de renovar usuario {telegram_id}.")
-            return True, "Acceso de usuario renovado por 30 días."
-        else:
-            return False, "Error al guardar los cambios tras renovar el usuario."
-    else:
-        # Este caso ya está cubierto por la verificación de user_index == -1
-        return False, "Usuario no encontrado para renovar."
-
-def get_user(telegram_id: int) -> dict | None:
-    """Obtiene los datos de un usuario por su ID de Telegram."""
-    users = _load_data()
-    for user in users:
-        if user.get('telegram_id') == telegram_id:
-            return user
-    return None
-
-# Modificado para filtrar por admin_id
-def get_all_users(admin_id: int) -> list:
-    """Obtiene todos los usuarios registrados creados por un admin_id específico."""
-    users = _load_data()
-    # Cargar ADMIN_TELEGRAM_ID de .env para la comparación
+    # Verificar permisos
     load_dotenv()
     original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
-    original_admin_id = None
-    is_original_admin = False
-    if original_admin_id_str:
-        try:
-            original_admin_id = int(original_admin_id_str)
-            if admin_id == original_admin_id:
-                is_original_admin = True
-        except ValueError:
-            pass # Ignorar si no es un entero válido
-
-    # El admin original ve todos los usuarios, los demás solo los suyos
-    if is_original_admin:
-        print(f"Admin original {admin_id} listando todos los usuarios.")
-        filtered_users = users
-    else:
-        print(f"Usuario {admin_id} listando sus usuarios creados.")
-        filtered_users = [user for user in users if user.get('creator_id') == admin_id]
-
-    # Ordenar por fecha de creación (opcional)
     try:
-        # Añadir manejo para usuarios sin fecha (aunque no debería pasar con la lógica actual)
-        filtered_users.sort(key=lambda x: datetime.datetime.strptime(x.get('creation_date', '1970-01-01 00:00:00'), "%Y-%m-%d %H:%M:%S"))
-    except (ValueError, TypeError) as e:
-        print(f"Advertencia: No se pudo ordenar usuarios por fecha: {e}")
-    return filtered_users
+        original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
+    except ValueError:
+        original_admin_id = None
+
+    is_creator = (original_creator_id == admin_id)
+    is_main_admin = (admin_id == original_admin_id)
+
+    if not is_creator and not is_main_admin:
+        return False, f"No tienes permiso para eliminar a '{username}' (Creado por: {original_creator_id})."
+
+    # Proceder con la eliminación
+    if username in config_list:
+        config_list.remove(username)
+        main_data["auth"]["config"] = config_list
+    else:
+        logger_usermanager.warning(f"Usuario '{username}' encontrado en tracking pero no en config.json al eliminar.")
+
+    del tracking_data[track_entry_index]
+
+    # Guardar ambos archivos
+    if _save_data(main_data) and _save_tracking_data(tracking_data):
+        logger_usermanager.info(f"Usuario '{username}' eliminado por {admin_id}. Intentando reiniciar zivpn.service...")
+        if not _restart_zivpn_service():
+             logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de eliminar a '{username}'.")
+        return True, f"Usuario '{username}' eliminado exitosamente."
+    else:
+        logger_usermanager.error(f"Error al guardar uno o ambos archivos para eliminar a '{username}'. Estado puede ser inconsistente.")
+        return False, f"Error crítico al guardar la configuración para '{username}'. Revisa los logs."
+
+
+def get_all_users(admin_id: int) -> list[str]:
+    """Obtiene la lista de usernames creados por admin_id (o todos si es main admin)."""
+    tracking_data = _load_tracking_data()
+
+    load_dotenv()
+    original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
+    try:
+        original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
+    except ValueError:
+        original_admin_id = None
+
+    is_main_admin = (admin_id == original_admin_id)
+
+    if is_main_admin:
+        # Devolver todos los usernames registrados en el tracking
+        usernames = [entry.get("username") for entry in tracking_data if entry.get("username")]
+    else:
+        # Devolver solo los usernames creados por este admin_id
+        usernames = [entry.get("username") for entry in tracking_data if entry.get("creator_id") == admin_id and entry.get("username")]
+
+    # Opcional: Ordenar alfabéticamente
+    usernames.sort(key=str.lower)
+    return usernames
 
 # --- Función de Backup ---
 
 def create_backup() -> str | None:
-    """Crea una copia de seguridad del archivo config.json."""
-    if not os.path.exists(CONFIG_FILE):
-        print(f"Error: El archivo de configuración {CONFIG_FILE} no existe. No se puede crear backup.")
-        return None
-
+    """Crea una copia de seguridad de config.json y manager_tracking.json."""
+    backup_paths = []
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    # Usar os.path.basename para obtener solo 'config.json'
-    base_filename = os.path.basename(CONFIG_FILE)
-    backup_filename = f"{base_filename}_{timestamp}.bak"
-    backup_path = os.path.join(BACKUP_DIR, backup_filename)
 
-    try:
-        shutil.copy2(CONFIG_FILE, backup_path)
-        print(f"Backup creado exitosamente en: {backup_path}")
-        return backup_path
-    except Exception as e:
-        print(f"Error al crear el backup de {CONFIG_FILE}: {e}")
-        return None
+    files_to_backup = {
+        CONFIG_FILE: "config.json",
+        TRACKING_FILE: "manager_tracking.json"
+    }
+
+    success = True
+    for file_path, base_name in files_to_backup.items():
+        if not os.path.exists(file_path):
+            logger_usermanager.error(f"Error: El archivo {file_path} no existe. No se puede crear backup.")
+            success = False
+            continue # Saltar al siguiente archivo
+
+        backup_filename = f"{base_name}_{timestamp}.bak"
+        backup_path = os.path.join(BACKUP_DIR, backup_filename)
+
+        try:
+            shutil.copy2(file_path, backup_path)
+            logger_usermanager.info(f"Backup de {base_name} creado exitosamente en: {backup_path}")
+            backup_paths.append(backup_path)
+        except Exception as e:
+            logger_usermanager.error(f"Error al crear el backup de {file_path}: {e}")
+            success = False
+
+    # Devolver la ruta del backup principal (config.json) si tuvo éxito, o None si algo falló
+    # Podríamos devolver una lista o un dict si fuera necesario manejar ambos archivos en el bot
+    config_backup_path = next((p for p in backup_paths if CONFIG_FILE in p), None)
+    return config_backup_path if success and config_backup_path else None
 
