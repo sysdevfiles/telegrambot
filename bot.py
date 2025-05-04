@@ -35,24 +35,24 @@ except ValueError:
 # --- Funciones Auxiliares ---
 def is_admin(update: Update) -> bool:
     """Verifica si el usuario que envía el mensaje es el administrador ORIGINAL."""
-    # Esta función ahora solo se usa para operaciones globales como backup
     return update.effective_user.id == ADMIN_ID
 
 # Modificado para ser llamado por cualquier usuario
 async def send_management_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Envía el menú de ayuda de gestión."""
+    # Texto base para cualquier usuario que pueda gestionar (incluido admin)
     help_text = (
         "🤖 *Menú de Gestión de Usuarios*\n\n"
-        "Puedes gestionar los usuarios que *tú* has creado:\n\n"
-        "`/add <user_id>` - Agrega un nuevo usuario (creado por ti) por 30 días.\n"
-        "`/delete <user_id>` - Elimina un usuario creado por ti.\n"
-        "`/update <user_id>` - Renueva por 30 días un usuario creado por ti.\n"
-        "`/list` - Lista los usuarios creados por ti.\n"
-        "`/help` - Muestra este menú.\n\n"
+        "Puedes gestionar los usuarios que *tú* has creado en `/etc/zivpn/config.json`:\n\n"
+        "➕ `/add <user_id>` - Añadir un nuevo usuario (creado por ti) por 30 días.\n"
+        "➖ `/delete <user_id>` - Eliminar un usuario creado por ti.\n"
+        "🔄 `/update <user_id>` - Renovar por 30 días un usuario creado por ti.\n"
+        "📋 `/list` - Listar los usuarios creados por ti.\n"
+        "❓ `/help` - Mostrar este menú.\n\n"
     )
     # Solo el admin original ve el comando backup en la ayuda principal
     if is_admin(update):
-         help_text += "`/backup` - (Admin) Crea un backup del archivo `config.json`.\n"
+         help_text += "💾 `/backup` - (Admin) Crea un backup del archivo `config.json`.\n"
 
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -239,15 +239,15 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     """Acciones a realizar después de inicializar el bot (ej. definir comandos)."""
-    # Actualizar descripciones para reflejar la gestión personal
+    # Actualizar descripciones para reflejar la gestión personal y añadir emojis
     await application.bot.set_my_commands([
-        BotCommand("start", "Iniciar el bot y verificar acceso"),
-        BotCommand("help", "Mostrar menú de gestión de usuarios"),
-        BotCommand("add", "Añadir un usuario nuevo (creado por ti)"),
-        BotCommand("delete", "Eliminar un usuario creado por ti"),
-        BotCommand("update", "Renovar un usuario creado por ti"),
-        BotCommand("list", "Listar usuarios creados por ti"),
-        BotCommand("backup", "Crear backup (Admin)"),
+        BotCommand("start", "▶️ Iniciar el bot y verificar acceso"),
+        BotCommand("help", "❓ Mostrar menú de gestión de usuarios"),
+        BotCommand("add", "➕ Añadir un usuario nuevo (creado por ti)"),
+        BotCommand("delete", "➖ Eliminar un usuario creado por ti"),
+        BotCommand("update", "🔄 Renovar un usuario creado por ti"),
+        BotCommand("list", "📋 Listar usuarios creados por ti"),
+        BotCommand("backup", "💾 Crear backup (Admin)"),
     ])
     logger_telegram.info("Comandos del bot definidos.")
 
