@@ -158,9 +158,38 @@ echo "Los archivos de datos y logs están en $CONFIG_DIR." | tee -a "$LOG_FILE"
 echo "El bot ahora se ejecuta como un servicio systemd llamado '${SERVICE_NAME}'." | tee -a "$LOG_FILE"
 echo ""
 echo "Próximos pasos:" | tee -a "$LOG_FILE"
-echo "1. Asegúrate de haber creado/editado el archivo .env en $PROJECT_DIR con tus credenciales." | tee -a "$LOG_FILE"
-echo "   Si lo creaste/modificaste DESPUÉS de ejecutar este script, reinicia el servicio:" | tee -a "$LOG_FILE"
-echo "   systemctl restart ${SERVICE_NAME}" | tee -a "$LOG_FILE"
+
+# --- 8.1 Crear y Editar .env ---
+echo ">>> Creando archivo .env con valores de ejemplo..." | tee -a "$LOG_FILE"
+# Navegar al directorio del proyecto
+cd "$PROJECT_DIR"
+# Crear .env con placeholders
+cat << EOF > .env
+TELEGRAM_BOT_TOKEN=TU_TOKEN_AQUI
+ADMIN_TELEGRAM_ID=TU_ID_DE_ADMIN_AQUI
+EOF
+echo "Archivo .env creado en $PROJECT_DIR." | tee -a "$LOG_FILE"
+
+# Abrir nano para editar (esto pausará el script hasta que el usuario cierre nano)
+echo ""
+echo ">>> Por favor, edita el archivo .env con tus credenciales reales." | tee -a "$LOG_FILE"
+echo "    Reemplaza 'TU_TOKEN_AQUI' y 'TU_ID_DE_ADMIN_AQUI'."
+echo "    Guarda los cambios en nano con Ctrl+X, luego Y, y Enter."
+echo "    Presiona Enter para abrir nano..."
+read -p "" # Espera a que el usuario presione Enter
+
+# Abrir nano
+nano .env
+
+echo ""
+echo "Archivo .env editado." | tee -a "$LOG_FILE"
+
+# --- 8.2 Reiniciar servicio para aplicar .env ---
+echo ">>> Reiniciando servicio ${SERVICE_NAME} para aplicar la configuración de .env..." | tee -a "$LOG_FILE"
+systemctl restart "${SERVICE_NAME}.service" || echo "Advertencia: Falló el reinicio del servicio. Revisa el estado con 'systemctl status ${SERVICE_NAME}'." | tee -a "$LOG_FILE"
+echo "Servicio reiniciado." | tee -a "$LOG_FILE"
+
+# --- 8.3 Comandos útiles ---
 echo ""
 echo "2. Comandos útiles para gestionar el servicio:" | tee -a "$LOG_FILE"
 echo "   - Ver estado: systemctl status ${SERVICE_NAME}" | tee -a "$LOG_FILE"

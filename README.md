@@ -76,23 +76,29 @@ Después de ejecutar `install.sh`, necesitas configurar tus credenciales:
     ```bash
     cd /opt/telegram_bot_manager/telegrambot
     ```
+    *(Opcional si usas la ruta completa en el siguiente paso)*
 
-2.  **Crea/Edita el archivo `.env`:**
-    Usa un editor como `nano`:
+2.  **Crea el archivo `.env` si no existe:**
     ```bash
-    nano .env
+    touch /opt/telegram_bot_manager/telegrambot/.env
     ```
 
-3.  **Añade tus credenciales:**
+3.  **Edita el archivo `.env`:**
+    Usa un editor como `nano` con la ruta completa:
+    ```bash
+    nano /opt/telegram_bot_manager/telegrambot/.env
+    ```
+
+4.  **Añade tus credenciales:**
     Reemplaza `TU_TOKEN_AQUI` con el token de tu bot de Telegram y `TU_ID_DE_ADMIN_AQUI` con tu ID numérico de Telegram (este será el administrador principal con override).
     ```dotenv
     TELEGRAM_BOT_TOKEN=TU_TOKEN_AQUI
     ADMIN_TELEGRAM_ID=TU_ID_DE_ADMIN_AQUI
     ```
 
-4.  **Guarda y Cierra:** En `nano`, presiona `Ctrl+X`, luego `Y`, y finalmente `Enter`.
+5.  **Guarda y Cierra:** En `nano`, presiona `Ctrl+X`, luego `Y`, y finalmente `Enter`.
 
-5.  **Reinicia el servicio (si ya estaba corriendo):** Si modificaste `.env` después de la instalación inicial, reinicia el servicio para que tome los nuevos valores:
+6.  **Reinicia el servicio (si ya estaba corriendo):** Si modificaste `.env` después de la instalación inicial, reinicia el servicio para que tome los nuevos valores:
     ```bash
     systemctl restart telegrambot
     ```
