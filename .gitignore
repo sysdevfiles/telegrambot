@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual Environment
+venv/
+*.venv
+
+# Environment variables
+.env
+
+# Backup directory
+backups/
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# IDE specific files (optional)
+.idea/
+.vscode/
+*.swp
+*~
