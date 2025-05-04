@@ -43,16 +43,26 @@ async def send_management_help(update: Update, context: ContextTypes.DEFAULT_TYP
     # Texto base para cualquier usuario que pueda gestionar (incluido admin)
     help_text = (
         "🤖 *Menú de Gestión de Usuarios*\n\n"
-        "Puedes gestionar los usuarios que *tú* has creado en `/etc/zivpn/config.json`:\n\n"
-        "➕ `/add <user_id>` - Añadir un nuevo usuario (creado por ti) por 30 días.\n"
-        "➖ `/delete <user_id>` - Eliminar un usuario creado por ti.\n"
-        "🔄 `/update <user_id>` - Renovar por 30 días un usuario creado por ti.\n"
-        "📋 `/list` - Listar los usuarios creados por ti.\n"
+        "Estos comandos modifican directamente el archivo `/etc/zivpn/config.json` para gestionar los usuarios que *tú* has creado:\n\n"
+        "➕ `/add <user_id>` - Añadir entrada de usuario al JSON (30 días).\n"
+        "➖ `/delete <user_id>` - Eliminar entrada de usuario del JSON.\n"
+        "🔄 `/update <user_id>` - Renovar fecha en la entrada JSON del usuario (30 días).\n"
+        "📋 `/list` - Listar tus entradas de usuario desde el JSON.\n"
         "❓ `/help` - Mostrar este menú.\n\n"
     )
     # Solo el admin original ve el comando backup en la ayuda principal
     if is_admin(update):
-         help_text += "💾 `/backup` - (Admin) Crea un backup del archivo `config.json`.\n"
+         # El admin también gestiona el mismo archivo, pero tiene override y backup
+         help_text = (
+            "👑 *Menú de Gestión de Administrador*\n\n"
+            "Gestionas `/etc/zivpn/config.json` con permisos elevados:\n\n"
+            "➕ `/add <user_id>` - Añadir/reactivar cualquier usuario (30 días).\n"
+            "➖ `/delete <user_id>` - Eliminar cualquier usuario.\n"
+            "🔄 `/update <user_id>` - Renovar cualquier usuario (30 días).\n"
+            "📋 `/list` - Listar *todos* los usuarios.\n"
+            "💾 `/backup` - Crear backup de `config.json`.\n"
+            "❓ `/help` - Mostrar este menú.\n\n"
+         )
 
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
@@ -239,7 +249,7 @@ async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def post_init(application: Application):
     """Acciones a realizar después de inicializar el bot (ej. definir comandos)."""
-    # Actualizar descripciones para reflejar la gestión personal y añadir emojis
+    # Las descripciones aquí son más cortas, mantenemos las anteriores
     await application.bot.set_my_commands([
         BotCommand("start", "▶️ Iniciar el bot y verificar acceso"),
         BotCommand("help", "❓ Mostrar menú de gestión de usuarios"),

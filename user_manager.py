@@ -3,9 +3,14 @@ import datetime
 import os
 import shutil
 from dotenv import load_dotenv
+import subprocess # Import subprocess module
+import logging # Use logging for better output control
 
 CONFIG_FILE = '/etc/zivpn/config.json'
 BACKUP_DIR = 'backups' # Directorio local para backups
+
+# Get a logger instance (optional, but good practice)
+logger_usermanager = logging.getLogger(__name__)
 
 # --- Funciones de bajo nivel para leer/escribir JSON ---
 
@@ -48,6 +53,28 @@ def _save_data(data: list):
 
 # --- Funciones de gestión de usuarios ---
 
+def _restart_zivpn_service():
+    """Intenta reiniciar el servicio zivpn.service."""
+    command = ["systemctl", "restart", "zivpn.service"]
+    try:
+        # Execute the command
+        result = subprocess.run(command, check=True, capture_output=True, text=True)
+        logger_usermanager.info(f"Comando '{' '.join(command)}' ejecutado exitosamente.")
+        # Optional: Log stdout/stderr if needed
+        # logger_usermanager.debug(f"stdout: {result.stdout}")
+        # logger_usermanager.debug(f"stderr: {result.stderr}")
+        return True
+    except FileNotFoundError:
+        logger_usermanager.error(f"Error: El comando 'systemctl' no se encontró. ¿Está systemd instalado y en el PATH?")
+        return False
+    except subprocess.CalledProcessError as e:
+        logger_usermanager.error(f"Error al ejecutar '{' '.join(command)}'. Código de retorno: {e.returncode}")
+        logger_usermanager.error(f"stderr: {e.stderr}")
+        return False
+    except Exception as e:
+        logger_usermanager.error(f"Error inesperado al ejecutar '{' '.join(command)}': {e}")
+        return False
+
 def init_storage():
     """Inicializa el archivo de configuración si no existe y el directorio de backups."""
     # Asegurar que el archivo JSON existe (lo hace _load_data si no existe)
@@ -67,6 +94,7 @@ def add_user(telegram_id: int, creator_id: int) -> bool:
     now = datetime.datetime.now()
     creation_date = now.strftime("%Y-%m-%d %H:%M:%S")
     expiration_date = (now + datetime.timedelta(days=30)).strftime("%Y-%m-%d %H:%M:%S")
+    action_performed = "agregado" # Default action text
 
     user_found = False
     for user in users:
@@ -76,7 +104,8 @@ def add_user(telegram_id: int, creator_id: int) -> bool:
             user['expiration_date'] = expiration_date
             user['creator_id'] = creator_id # Actualiza el creador en reactivación
             user_found = True
-            print(f"Usuario {telegram_id} reactivado por {creator_id}.")
+            action_performed = "reactivado" # Update action text
+            logger_usermanager.info(f"Usuario {telegram_id} {action_performed} por {creator_id}.")
             break
 
     if not user_found:
@@ -86,9 +115,16 @@ def add_user(telegram_id: int, creator_id: int) -> bool:
             'expiration_date': expiration_date,
             'creator_id': creator_id # Añade el creador
         })
-        print(f"Usuario {telegram_id} agregado por {creator_id}.")
+        logger_usermanager.info(f"Usuario {telegram_id} {action_performed} por {creator_id}.")
 
-    return _save_data(users)
+    if _save_data(users):
+        logger_usermanager.info(f"Datos guardados. Intentando reiniciar zivpn.service tras {action_performed} de usuario {telegram_id}...")
+        if not _restart_zivpn_service():
+             # Log or handle the error if the restart fails, but don't necessarily fail the add_user operation
+             logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de {action_performed} de usuario {telegram_id}.")
+        return True # Return True because user data was saved
+    else:
+        return False # Return False if saving data failed
 
 # Modificado para verificar creator_id
 def delete_user(telegram_id: int, admin_id: int) -> tuple[bool, str]:
@@ -181,6 +217,9 @@ def renew_user(telegram_id: int, admin_id: int) -> tuple[bool, str]:
 
     if user_found:
         if _save_data(users):
+            logger_usermanager.info(f"Datos guardados. Intentando reiniciar zivpn.service tras renovación de usuario {telegram_id}...")
+            if not _restart_zivpn_service():
+                logger_usermanager.warning(f"No se pudo reiniciar zivpn.service después de renovar usuario {telegram_id}.")
             return True, "Acceso de usuario renovado por 30 días."
         else:
             return False, "Error al guardar los cambios tras renovar el usuario."
