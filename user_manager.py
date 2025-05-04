@@ -7,7 +7,8 @@ import subprocess
 import logging
 
 CONFIG_FILE = '/etc/zivpn/config.json'
-TRACKING_FILE = '/etc/zivpn/manager_tracking.json' # Nuevo archivo de tracking
+TRACKING_FILE = '/etc/zivpn/manager_tracking.json'
+BOT_MANAGERS_FILE = '/etc/zivpn/bot_managers.json' # Nuevo archivo de gestores
 BACKUP_DIR = 'backups'
 
 logger_usermanager = logging.getLogger(__name__)
@@ -24,6 +25,7 @@ DEFAULT_CONFIG = {
   }
 }
 DEFAULT_TRACKING = [] # El archivo de tracking es una lista
+DEFAULT_BOT_MANAGERS = [] # Lista de IDs autorizados
 
 # --- Funciones de bajo nivel para leer/escribir JSON ---
 
@@ -101,6 +103,51 @@ def _save_tracking_data(data: list) -> bool:
         logger_usermanager.error(f"Error: Los datos de tracking no son serializables a JSON: {e}")
         return False
 
+# --- Funciones para Bot Managers File ---
+
+def _load_bot_managers() -> list[int]:
+    """Carga la lista de IDs de gestores autorizados."""
+    if not os.path.exists(BOT_MANAGERS_FILE):
+        logger_usermanager.warning(f"El archivo de gestores {BOT_MANAGERS_FILE} no existe. Se creará vacío.")
+        _save_bot_managers(DEFAULT_BOT_MANAGERS)
+        return DEFAULT_BOT_MANAGERS.copy()
+    if os.path.getsize(BOT_MANAGERS_FILE) == 0:
+         logger_usermanager.warning(f"El archivo de gestores {BOT_MANAGERS_FILE} está vacío.")
+         return DEFAULT_BOT_MANAGERS.copy()
+    try:
+        with open(BOT_MANAGERS_FILE, 'r') as f:
+            data = json.load(f)
+            if not isinstance(data, list):
+                logger_usermanager.error(f"El contenido de {BOT_MANAGERS_FILE} no es una lista. Se usará lista vacía.")
+                return DEFAULT_BOT_MANAGERS.copy()
+            # Validar que sean enteros
+            valid_ids = []
+            for item in data:
+                if isinstance(item, int):
+                    valid_ids.append(item)
+                else:
+                    logger_usermanager.warning(f"Entrada no entera encontrada en {BOT_MANAGERS_FILE}: {item}")
+            return valid_ids
+    except json.JSONDecodeError:
+        logger_usermanager.error(f"No se pudo decodificar JSON en {BOT_MANAGERS_FILE}. Se usará lista vacía.")
+        return DEFAULT_BOT_MANAGERS.copy()
+    except IOError as e:
+        logger_usermanager.error(f"Error de E/S al leer {BOT_MANAGERS_FILE}: {e}. Se usará lista vacía.")
+        return DEFAULT_BOT_MANAGERS.copy()
+
+def _save_bot_managers(data: list[int]) -> bool:
+    """Guarda la lista de IDs de gestores autorizados."""
+    try:
+        with open(BOT_MANAGERS_FILE, 'w') as f:
+            json.dump(data, f, indent=4)
+        return True
+    except IOError as e:
+        logger_usermanager.error(f"Error de E/S al escribir en {BOT_MANAGERS_FILE}: {e}")
+        return False
+    except TypeError as e:
+        logger_usermanager.error(f"Error: Los datos de gestores no son serializables a JSON: {e}")
+        return False
+
 # --- Funciones de gestión ---
 
 def _restart_zivpn_service():
@@ -116,9 +163,10 @@ def _restart_zivpn_service():
 
 
 def init_storage():
-    """Inicializa ambos archivos de configuración si no existen."""
+    """Inicializa todos los archivos de configuración si no existen."""
     _load_data() # Asegura config.json
     _load_tracking_data() # Asegura manager_tracking.json
+    _load_bot_managers() # Asegura bot_managers.json
     if not os.path.exists(BACKUP_DIR):
         try:
             os.makedirs(BACKUP_DIR)
@@ -270,16 +318,63 @@ def get_all_users(admin_id: int) -> list[str]:
     usernames.sort(key=str.lower)
     return usernames
 
+# --- Funciones de gestión de acceso al bot ---
+
+def add_bot_manager(user_id: int) -> tuple[bool, str]:
+    """Añade un ID de usuario a la lista de gestores autorizados."""
+    managers = _load_bot_managers()
+
+    # Cargar ADMIN_TELEGRAM_ID para evitar añadirlo
+    load_dotenv()
+    original_admin_id_str = os.getenv('ADMIN_TELEGRAM_ID')
+    try:
+        original_admin_id = int(original_admin_id_str) if original_admin_id_str else None
+    except ValueError:
+        original_admin_id = None
+
+    if user_id == original_admin_id:
+        return False, "El administrador principal ya tiene acceso por defecto."
+
+    if user_id in managers:
+        return False, f"El usuario {user_id} ya está autorizado."
+
+    managers.append(user_id)
+    if _save_bot_managers(managers):
+        logger_usermanager.info(f"Acceso concedido al usuario {user_id}.")
+        return True, f"Acceso concedido al usuario {user_id}."
+    else:
+        return False, f"Error al guardar la lista de gestores al añadir a {user_id}."
+
+def remove_bot_manager(user_id: int) -> tuple[bool, str]:
+    """Elimina un ID de usuario de la lista de gestores autorizados."""
+    managers = _load_bot_managers()
+
+    if user_id not in managers:
+        return False, f"El usuario {user_id} no se encontró en la lista de autorizados."
+
+    managers.remove(user_id)
+    if _save_bot_managers(managers):
+        logger_usermanager.info(f"Acceso revocado al usuario {user_id}.")
+        return True, f"Acceso revocado al usuario {user_id}."
+    else:
+        return False, f"Error al guardar la lista de gestores al revocar a {user_id}."
+
+def is_bot_manager(user_id: int) -> bool:
+    """Verifica si un ID de usuario está en la lista de gestores autorizados."""
+    managers = _load_bot_managers()
+    return user_id in managers
+
 # --- Función de Backup ---
 
 def create_backup() -> str | None:
-    """Crea una copia de seguridad de config.json y manager_tracking.json."""
+    """Crea una copia de seguridad de config.json, tracking.json y bot_managers.json."""
     backup_paths = []
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     files_to_backup = {
         CONFIG_FILE: "config.json",
-        TRACKING_FILE: "manager_tracking.json"
+        TRACKING_FILE: "manager_tracking.json",
+        BOT_MANAGERS_FILE: "bot_managers.json" # Añadido
     }
 
     success = True
@@ -287,7 +382,7 @@ def create_backup() -> str | None:
         if not os.path.exists(file_path):
             logger_usermanager.error(f"Error: El archivo {file_path} no existe. No se puede crear backup.")
             success = False
-            continue # Saltar al siguiente archivo
+            continue
 
         backup_filename = f"{base_name}_{timestamp}.bak"
         backup_path = os.path.join(BACKUP_DIR, backup_filename)
@@ -300,8 +395,6 @@ def create_backup() -> str | None:
             logger_usermanager.error(f"Error al crear el backup de {file_path}: {e}")
             success = False
 
-    # Devolver la ruta del backup principal (config.json) si tuvo éxito, o None si algo falló
-    # Podríamos devolver una lista o un dict si fuera necesario manejar ambos archivos en el bot
     config_backup_path = next((p for p in backup_paths if CONFIG_FILE in p), None)
     return config_backup_path if success and config_backup_path else None
 

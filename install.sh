@@ -107,11 +107,16 @@ echo ">>> Creando/Sobrescribiendo archivo de log $CONFIG_DIR/admin_log.json..." 
 sh -c "echo '[]' > ${CONFIG_DIR}/admin_log.json"
 echo "Archivo admin_log.json creado/reiniciado." | tee -a "$LOG_FILE"
 
-# --- Añadir creación de archivo de tracking ---
 echo ">>> Creando/Sobrescribiendo archivo de tracking $CONFIG_DIR/manager_tracking.json..." | tee -a "$LOG_FILE"
 # Removido sudo
 sh -c "echo '[]' > ${CONFIG_DIR}/manager_tracking.json"
 echo "Archivo manager_tracking.json creado/reiniciado." | tee -a "$LOG_FILE"
+
+# --- Añadir creación de archivo de gestores del bot ---
+echo ">>> Creando/Sobrescribiendo archivo de gestores $CONFIG_DIR/bot_managers.json..." | tee -a "$LOG_FILE"
+# Removido sudo
+sh -c "echo '[]' > ${CONFIG_DIR}/bot_managers.json"
+echo "Archivo bot_managers.json creado/reiniciado." | tee -a "$LOG_FILE"
 # --- Fin de añadido ---
 
 echo ">>> Estableciendo permisos para $CONFIG_DIR..." | tee -a "$LOG_FILE"
@@ -120,6 +125,7 @@ chown -R "$BOT_USER":"$BOT_GROUP" "$CONFIG_DIR"
 # Asegurar permisos específicos si es necesario (aunque chown -R debería bastar)
 # chmod 600 "${CONFIG_DIR}/config.json" # Ejemplo si se quisiera más restricción
 # chmod 600 "${CONFIG_DIR}/manager_tracking.json"
+# chmod 600 "${CONFIG_DIR}/bot_managers.json" # Añadido
 # chmod 600 "${CONFIG_DIR}/admin_log.json"
 echo "Propietario de $CONFIG_DIR establecido a $BOT_USER:$BOT_GROUP." | tee -a "$LOG_FILE"
 

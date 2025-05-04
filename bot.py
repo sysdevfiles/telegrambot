@@ -37,26 +37,51 @@ def is_admin(update: Update) -> bool:
     """Verifica si el usuario que envía el mensaje es el administrador ORIGINAL."""
     return update.effective_user.id == ADMIN_ID
 
+def is_authorized(update: Update) -> bool:
+    """Verifica si el usuario es el Admin principal o está en la lista de gestores."""
+    user_id = update.effective_user.id
+    return user_id == ADMIN_ID or user_manager.is_bot_manager(user_id)
+
 async def send_management_help(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Envía el menú de ayuda de gestión."""
-    # Menú para todos los usuarios que pueden gestionar
+    # Texto base para usuarios autorizados (no admin)
     help_text = (
         "🤖 *Menú de Gestión de Usuarios (zivpn)*\n\n"
         "Gestiona los usuarios que *tú* has añadido a `/etc/zivpn/config.json`:\n\n"
         "➕ `/add <username>` - Añadir usuario a la lista `auth.config`.\n*Ejemplo:* `/add juanperez`\n\n"
         "➖ `/delete <username>` - Eliminar usuario (creado por ti) de `auth.config`.\n*Ejemplo:* `/delete juanperez`\n\n"
-        "📋 `/list` - Listar usuarios creados por ti (o todos si eres Admin).\n\n"
-        "💾 `/backup` - (Admin) Crear backup de `config.json` y `manager_tracking.json`.\n\n"
+        "📋 `/list` - Listar usuarios creados por ti.\n\n"
         "❓ `/help` - Mostrar este menú.\n\n"
-        "*Nota: El Admin Principal puede eliminar usuarios creados por otros.*"
+        "*Nota: Necesitas autorización del Admin para usar estos comandos.*"
     )
-    # El admin ve el mismo menú, pero /list y /delete tienen comportamiento extendido
+
+    # Si es el admin principal, muestra un menú extendido
+    if is_admin(update):
+        help_text = (
+            "👑 *Menú de Administrador Principal*\n\n"
+            "**Gestión de Usuarios zivpn:**\n"
+            "➕ `/add <username>` - Añadir usuario a `auth.config`.\n"
+            "➖ `/delete <username>` - Eliminar usuario de `auth.config` (cualquiera).\n"
+            "📋 `/list` - Listar *todos* los usuarios registrados.\n\n"
+            "**Gestión de Acceso al Bot:**\n"
+            "✅ `/grant <user_id>` - Autorizar a un usuario a usar este bot.\n*Ejemplo:* `/grant 123456789`\n"
+            "❌ `/revoke <user_id>` - Revocar autorización a un usuario.\n*Ejemplo:* `/revoke 123456789`\n\n"
+            "**Otras Funciones:**\n"
+            "💾 `/backup` - Crear backup de archivos de configuración.\n"
+            "❓ `/help` - Mostrar este menú.\n"
+        )
+
     await update.message.reply_text(help_text, parse_mode='Markdown')
 
 # --- Manejadores de Comandos ---
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manejador para el comando /start."""
+    # Comprobar autorización primero
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ No tienes permiso para usar este bot. Contacta al administrador.")
+        return
+
     user = update.effective_user
     logger_telegram.info(f"Usuario {user.id} ({user.username}) inició el bot.")
     greeting = f"¡Hola {user.first_name}!"
@@ -68,11 +93,16 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manejador para el comando /help."""
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ No tienes permiso para usar este bot.")
+        return
     await send_management_help(update, context)
 
 async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Agrega un username a la lista auth.config y lo registra."""
-    # No más check is_admin aquí
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ No tienes permiso para usar este comando.")
+        return
     creator_id = update.effective_user.id # ID del usuario que ejecuta el comando
 
     args = context.args
@@ -94,7 +124,9 @@ async def add_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Elimina un username de la lista auth.config (si tiene permiso)."""
-    # No más check is_admin aquí
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ No tienes permiso para usar este comando.")
+        return
     admin_id = update.effective_user.id # ID del usuario que ejecuta el comando
 
     args = context.args
@@ -116,6 +148,9 @@ async def delete_user_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Lista los usernames creados por el usuario (o todos si es admin)."""
+    if not is_authorized(update):
+        await update.message.reply_text("⛔ No tienes permiso para usar este comando.")
+        return
     admin_id = update.effective_user.id # ID del usuario que ejecuta el comando
 
     # Pasar admin_id para filtrar en user_manager
@@ -156,10 +191,77 @@ async def list_users_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         for part in parts:
              await update.message.reply_text(part, parse_mode='Markdown')
 
-async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Crea un backup de config.json y tracking.json (solo admin original)."""
+# --- Nuevos Comandos de Gestión de Acceso ---
+
+async def grant_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin Only) Autoriza a un usuario a usar el bot."""
     if not is_admin(update):
-        await update.message.reply_text("❌ No tienes permiso para usar este comando.")
+        await update.message.reply_text("⛔ Comando reservado para el Administrador Principal.")
+        return
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("Uso: /grant <user_id>")
+        return
+
+    try:
+        user_id_to_grant = int(args[0])
+    except ValueError:
+        await update.message.reply_text("El ID de usuario debe ser un número.")
+        return
+
+    success, message = user_manager.add_bot_manager(user_id=user_id_to_grant)
+
+    if success:
+        logger.log_action(update.effective_user.id, "grant_access", target_username=str(user_id_to_grant), details=message)
+        await update.message.reply_text(f"✅ {message}")
+        # Opcional: Notificar al usuario que ha recibido acceso
+        # try:
+        #     await context.bot.send_message(chat_id=user_id_to_grant, text="✅ ¡Has sido autorizado para usar el bot de gestión!")
+        # except Exception as e:
+        #     logger_telegram.warning(f"No se pudo notificar al usuario {user_id_to_grant} sobre el acceso concedido: {e}")
+    else:
+        logger.log_action(update.effective_user.id, "grant_access_fail", target_username=str(user_id_to_grant), details=message)
+        await update.message.reply_text(f"⚠️ {message}")
+
+async def revoke_access_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """(Admin Only) Revoca la autorización de un usuario para usar el bot."""
+    if not is_admin(update):
+        await update.message.reply_text("⛔ Comando reservado para el Administrador Principal.")
+        return
+
+    args = context.args
+    if len(args) != 1:
+        await update.message.reply_text("Uso: /revoke <user_id>")
+        return
+
+    try:
+        user_id_to_revoke = int(args[0])
+    except ValueError:
+        await update.message.reply_text("El ID de usuario debe ser un número.")
+        return
+
+    success, message = user_manager.remove_bot_manager(user_id=user_id_to_revoke)
+
+    if success:
+        logger.log_action(update.effective_user.id, "revoke_access", target_username=str(user_id_to_revoke), details=message)
+        await update.message.reply_text(f"✅ {message}")
+        # Opcional: Notificar al usuario que se le ha revocado el acceso
+        # try:
+        #     await context.bot.send_message(chat_id=user_id_to_revoke, text="❌ Tu autorización para usar el bot de gestión ha sido revocada.")
+        # except Exception as e:
+        #     logger_telegram.warning(f"No se pudo notificar al usuario {user_id_to_revoke} sobre el acceso revocado: {e}")
+    else:
+        logger.log_action(update.effective_user.id, "revoke_access_fail", target_username=str(user_id_to_revoke), details=message)
+        await update.message.reply_text(f"⚠️ {message}")
+
+# --- Fin Nuevos Comandos ---
+
+async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Crea un backup de los archivos de config (solo admin original)."""
+    if not is_admin(update):
+        # Ya no usamos is_authorized aquí, backup es solo para el admin principal
+        await update.message.reply_text("⛔ Comando reservado para el Administrador Principal.")
         return
 
     # user_manager.create_backup ahora intenta hacer backup de ambos
@@ -182,17 +284,22 @@ async def backup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def unknown_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Manejador para comandos desconocidos."""
-    await update.message.reply_text("Comando desconocido. Usa /help para ver los comandos disponibles.")
+    # Informar solo si está autorizado, para no dar pistas a usuarios no autorizados
+    if is_authorized(update):
+        await update.message.reply_text("Comando desconocido. Usa /help para ver los comandos disponibles.")
+    # Si no está autorizado, no respondemos nada a comandos desconocidos
 
 async def post_init(application: Application):
     """Acciones a realizar después de inicializar el bot (ej. definir comandos)."""
-    # Remover "(Admin)" de add/delete
+    # Añadir grant y revoke
     await application.bot.set_my_commands([
         BotCommand("start", "▶️ Iniciar el bot"),
         BotCommand("help", "❓ Mostrar menú de ayuda"),
         BotCommand("add", "➕ Añadir usuario a zivpn"),
         BotCommand("delete", "➖ Eliminar usuario de zivpn"),
         BotCommand("list", "📋 Listar usuarios de zivpn"),
+        BotCommand("grant", "✅ (Admin) Autorizar usuario para el bot"),
+        BotCommand("revoke", "❌ (Admin) Revocar usuario del bot"),
         BotCommand("backup", "💾 (Admin) Crear backup config"),
     ])
     logger_telegram.info("Comandos del bot definidos.")
@@ -211,6 +318,8 @@ def main():
     application.add_handler(CommandHandler("add", add_user_command))
     application.add_handler(CommandHandler("delete", delete_user_command))
     application.add_handler(CommandHandler("list", list_users_command))
+    application.add_handler(CommandHandler("grant", grant_access_command)) # Añadido
+    application.add_handler(CommandHandler("revoke", revoke_access_command)) # Añadido
     application.add_handler(CommandHandler("backup", backup_command))
     application.add_handler(MessageHandler(filters.COMMAND, unknown_command))
 
